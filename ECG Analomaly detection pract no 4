@@ -1,0 +1,97 @@
+
+# Practical 4: ECG Anomaly Detection using Autoencoder
+
+# 1. Import libraries
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+import matplotlib.pyplot as plt
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import accuracy_score
+from tensorflow.keras import Model, Sequential
+from tensorflow.keras.layers import Dense
+
+# 2. Load ECG dataset
+url = "https://storage.googleapis.com/download.tensorflow.org/data/ecg.csv"
+data = pd.read_csv(url, header=None)
+
+# 3. Separate features and target
+X = data.iloc[:, :-1]
+y = data.iloc[:, -1]
+
+print("Dataset Shape:", data.shape)
+
+# 4. Split dataset
+x_train, x_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, stratify=y, random_state=42
+)
+
+# 5. Select normal records only
+x_train = x_train[y_train == 1]
+
+# 6. Normalize data
+scaler = MinMaxScaler()
+x_train = scaler.fit_transform(x_train)
+x_test = scaler.transform(x_test)
+
+# 7. Create Autoencoder
+class AutoEncoder(Model):
+    def __init__(self, output_units):
+        super().__init__()
+        self.encoder = Sequential([
+            Dense(64, activation='relu'),
+            Dense(32, activation='relu'),
+            Dense(16, activation='relu'),
+            Dense(8, activation='relu')
+        ])
+        self.decoder = Sequential([
+            Dense(16, activation='relu'),
+            Dense(32, activation='relu'),
+            Dense(64, activation='relu'),
+            Dense(output_units, activation='sigmoid')
+        ])
+
+    def call(self, inputs):
+        return self.decoder(self.encoder(inputs))
+
+# 8. Compile model
+model = AutoEncoder(x_train.shape[1])
+model.compile(optimizer='adam', loss='msle', metrics=['mse'])
+
+# 9. Train model
+history = model.fit(
+    x_train, x_train,
+    epochs=20,
+    batch_size=512,
+    validation_data=(x_test, x_test)
+)
+
+# 10. Plot loss
+plt.plot(history.history['loss'], label='Training Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+# 11. Calculate reconstruction error
+train_pred = model.predict(x_train, verbose=0)
+errors = tf.keras.losses.msle(x_train, train_pred).numpy()
+
+# 12. Find anomaly threshold
+threshold = np.mean(errors) + np.std(errors)
+print("Threshold:", threshold)
+
+# 13. Detect anomalies
+test_pred = model.predict(x_test, verbose=0)
+test_errors = tf.keras.losses.msle(x_test, test_pred).numpy()
+predictions = (test_errors > threshold).astype(int)
+
+# 14. Calculate accuracy
+actual = (y_test == 0).astype(int)
+accuracy = accuracy_score(actual, predictions)
+
+print("Accuracy:", accuracy * 100, "%")
+print("ECG Anomaly Detection Completed by Dnyanesh")
