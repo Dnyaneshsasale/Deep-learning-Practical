@@ -1,0 +1,84 @@
+
+# Practical 5: Continuous Bag of Words (CBOW)
+
+import numpy as np
+import tensorflow as tf
+import matplotlib.pyplot as plt
+
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Embedding, Lambda, Dense
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.utils import to_categorical
+from gensim.models import KeyedVectors
+
+# 1. Data preparation
+data = [
+    "I love learning python programming",
+    "Python is a popular programming language",
+    "I love learning machine learning",
+    "Machine learning is part of artificial intelligence",
+    "Artificial intelligence makes computers smart"
+]
+
+# 2. Tokenization
+tokenizer = Tokenizer()
+tokenizer.fit_on_texts(data)
+sequences = tokenizer.texts_to_sequences(data)
+
+vocab_size = len(tokenizer.word_index) + 1
+
+print("Vocabulary:", tokenizer.word_index)
+print("Total sentences:", len(sequences))
+print("Total words:", sum(len(s) for s in sequences))
+
+# 3. Generate context and target words
+window = 2
+
+def generate_data():
+    for sentence in sequences:
+        for i, word in enumerate(sentence):
+            context = sentence[max(0, i-window):i] + sentence[i+1:i+window+1]
+            context = pad_sequences([context], maxlen=2*window)[0]
+            target = to_categorical(word, vocab_size)
+            yield context, target
+
+pairs = list(generate_data())
+
+X = np.array([x for x, y in pairs])
+Y = np.array([y for x, y in pairs])
+
+print("Training data:", X.shape, Y.shape)
+
+# 4. Build and train CBOW model
+model = Sequential([
+    Embedding(vocab_size, 100),
+    Lambda(lambda x: tf.reduce_mean(x, axis=1)),
+    Dense(vocab_size, activation="softmax")
+])
+
+model.compile(loss="categorical_crossentropy", optimizer="adam")
+
+history = model.fit(X, Y, epochs=100, verbose=1)
+
+# 5. Plot training loss
+plt.plot(history.history["loss"])
+plt.title("CBOW Training Loss")
+plt.xlabel("Epochs")
+plt.ylabel("Loss")
+plt.grid()
+plt.show()
+
+# 6. Save word vectors
+vectors = model.get_weights()[0]
+
+with open("vectors.txt", "w") as f:
+    f.write(f"{len(tokenizer.word_index)} 100\n")
+    for word, index in tokenizer.word_index.items():
+        f.write(word + " " + " ".join(map(str, vectors[index])) + "\n")
+
+# 7. Find similar words
+words = KeyedVectors.load_word2vec_format("vectors.txt", binary=False)
+print("Similar words:", words.most_similar("learning"))
+
+print("CBOW completed successfully by Dnyanesh")
