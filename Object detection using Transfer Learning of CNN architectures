@@ -1,38 +1,72 @@
-
+# ==========================================
 # Practical 6: Transfer Learning using MobileNetV2
+# ==========================================
 
+# 1. Import Libraries
+import os
+import gdown
 import tensorflow as tf
 import matplotlib.pyplot as plt
+
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.applications import MobileNetV2
+from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
 from tensorflow.keras.layers import Dense, Dropout, GlobalAveragePooling2D
 from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import Adam
 
-# 1. Dataset paths
-BASE_PATH = r"C:\Users\dnyan\dataset"
 
+# 2. Download and Extract Dataset from Google Drive
+FOLDER_ID = "1aZxTnxkWPBs5r1RwiTxy_MMQSAQLeE2s"
+DOWNLOAD_PATH = "/content/dataset"
+
+print("Downloading dataset from Google Drive...")
+gdown.download_folder(
+    id=FOLDER_ID,
+    output=DOWNLOAD_PATH,
+    quiet=False,
+    use_cookies=False
+)
+
+# Automatically locate the base folder containing train, validation, and test directories
+BASE_PATH = None
+for root, dirs, files in os.walk(DOWNLOAD_PATH):
+    if all(os.path.isdir(os.path.join(root, folder)) for folder in ["train", "validation", "test"]):
+        BASE_PATH = root
+        break
+
+if BASE_PATH is None:
+    raise Exception("Dataset folders (train/validation/test) not found. Check directory structure.")
+
+print("Dataset Path Found:", BASE_PATH)
+
+
+# 3. Define Image Parameters & Data Generators with Preprocessing
 IMG_SIZE = (128, 128)
 BATCH_SIZE = 32
 
-# 2. Data preprocessing
+# Training data generator with data augmentation
 train_gen = ImageDataGenerator(
-    rescale=1./255,
+    preprocessing_function=preprocess_input,
     rotation_range=20,
     horizontal_flip=True
 )
 
-test_gen = ImageDataGenerator(rescale=1./255)
+# Validation and testing generators (only preprocessing, no augmentation)
+test_gen = ImageDataGenerator(
+    preprocessing_function=preprocess_input
+)
 
+# Load data using flow_from_directory
 train_data = train_gen.flow_from_directory(
-    BASE_PATH + r"\train",
+    os.path.join(BASE_PATH, "train"),
     target_size=IMG_SIZE,
     batch_size=BATCH_SIZE,
     class_mode="categorical"
 )
 
 val_data = test_gen.flow_from_directory(
-    BASE_PATH + r"\validation",
+    os.path.join(BASE_PATH, "validation"),
     target_size=IMG_SIZE,
     batch_size=BATCH_SIZE,
     class_mode="categorical",
@@ -40,97 +74,117 @@ val_data = test_gen.flow_from_directory(
 )
 
 test_data = test_gen.flow_from_directory(
-    BASE_PATH + r"\test",
+    os.path.join(BASE_PATH, "test"),
     target_size=IMG_SIZE,
     batch_size=BATCH_SIZE,
     class_mode="categorical",
     shuffle=False
 )
 
-# 3. Load pretrained MobileNetV2
+print("Class Mapping:", train_data.class_indices)
+
+
+# 4. Load Pre-trained CNN Model (MobileNetV2)
 base_model = MobileNetV2(
     weights="imagenet",
     include_top=False,
     input_shape=(128, 128, 3)
 )
 
-# 4. Freeze pretrained layers
+# Freeze lower convolutional layers' weights
 base_model.trainable = False
 
-# 5. Add custom classifier
+
+# 5. Add Custom Classifier Layers
 x = GlobalAveragePooling2D()(base_model.output)
 x = Dense(128, activation="relu")(x)
 x = Dropout(0.5)(x)
-output = Dense(train_data.num_classes, activation="softmax")(x)
+output_layer = Dense(train_data.num_classes, activation="softmax")(x)
 
-# 6. Create model
-model = Model(base_model.input, output)
+# Combine base model and custom classifier
+model = Model(inputs=base_model.input, outputs=output_layer)
 
-# 7. Compile model
+
+# 6. Compile Model for Initial Training
 model.compile(
-    optimizer=Adam(0.001),
+    optimizer=Adam(learning_rate=0.001),
     loss="categorical_crossentropy",
     metrics=["accuracy"]
 )
 
 model.summary()
 
-# 8. Train classifier
+
+# 7. Train Classifier Layers
+print("--- Phase 1: Training Custom Classifier Layers ---")
 history1 = model.fit(
     train_data,
     validation_data=val_data,
     epochs=5
 )
 
-# 9. Fine-tune last 20 layers
+
+# 8. Fine-Tuning: Unfreeze Last 20 Layers of the Base Model
+print("--- Phase 2: Fine-Tuning Model ---")
 base_model.trainable = True
 
+# Freeze all layers except the last 20
 for layer in base_model.layers[:-20]:
     layer.trainable = False
 
-# 10. Recompile with smaller learning rate
+# Keep Batch Normalization layers frozen for stability
+for layer in base_model.layers:
+    if isinstance(layer, tf.keras.layers.BatchNormalization):
+        layer.trainable = False
+
+# Recompile with a smaller learning rate for fine-tuning
 model.compile(
-    optimizer=Adam(0.0001),
+    optimizer=Adam(learning_rate=0.0001),
     loss="categorical_crossentropy",
     metrics=["accuracy"]
 )
 
-# 11. Fine-tune model
 history2 = model.fit(
     train_data,
     validation_data=val_data,
     epochs=5
 )
 
-# 12. Evaluate model
-loss, accuracy = model.evaluate(test_data)
 
-print("Test Loss:", loss)
-print("Test Accuracy:", accuracy)
+# 9. Evaluate Model on Test Data
+test_loss, test_accuracy = model.evaluate(test_data)
+print(f"Test Loss: {test_loss:.4f}")
+print(f"Test Accuracy: {test_accuracy * 100:.2f}%")
 
-# 13. Combine training history
+
+# 10. Combine History and Plot Performance Curves
 acc = history1.history["accuracy"] + history2.history["accuracy"]
 val_acc = history1.history["val_accuracy"] + history2.history["val_accuracy"]
-
 loss = history1.history["loss"] + history2.history["loss"]
 val_loss = history1.history["val_loss"] + history2.history["val_loss"]
 
-# 14. Plot accuracy
-plt.plot(acc, label="Training Accuracy")
-plt.plot(val_acc, label="Validation Accuracy")
-plt.axvline(4, linestyle="--", label="Fine-Tuning")
+# Plot Accuracy
+plt.figure(figsize=(8, 5))
+plt.plot(acc, label="Training Accuracy", marker='o')
+plt.plot(val_acc, label="Validation Accuracy", marker='o')
+plt.axvline(4.5, color='red', linestyle="--", label="Fine-Tuning Start")
 plt.xlabel("Epoch")
 plt.ylabel("Accuracy")
 plt.title("Training and Validation Accuracy")
 plt.legend()
+plt.grid(True)
 plt.show()
 
-# 15. Plot loss
-plt.plot(loss, label="Training Loss")
-plt.plot(val_loss, label="Validation Loss")
-plt.axvline(4, linestyle="--", label="Fine-Tuning")
+# Plot Loss
+plt.figure(figsize=(8, 5))
+plt.plot(loss, label="Training Loss", marker='o')
+plt.plot(val_loss, label="Validation Loss", marker='o')
+plt.axvline(4.5, color='red', linestyle="--", label="Fine-Tuning Start")
 plt.xlabel("Epoch")
 plt.ylabel("Loss")
 plt.title("Training and Validation Loss")
 plt.legend()
-plt.show()
+plt.grid(True)
+plt.show() 
+
+print("Image detected successfully by Dnyanesh")
